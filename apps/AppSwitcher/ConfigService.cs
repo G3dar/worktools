@@ -3,7 +3,7 @@ using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
 
-namespace FourAppSwitcher;
+namespace AppSwitcher;
 
 public static class ConfigService
 {
@@ -17,7 +17,7 @@ public static class ConfigService
     public static string GetConfigDirectory()
     {
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        var dir = Path.Combine(appData, "FourAppSwitcher");
+        var dir = Path.Combine(appData, "AppSwitcher");
         Directory.CreateDirectory(dir);
         return dir;
     }

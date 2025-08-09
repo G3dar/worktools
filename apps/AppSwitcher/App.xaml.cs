@@ -1,6 +1,6 @@
 using System.Windows;
 
-namespace FourAppSwitcher;
+namespace AppSwitcher;
 
 public partial class App : System.Windows.Application
 {

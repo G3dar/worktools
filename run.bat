@@ -3,20 +3,20 @@ setlocal
 set "SCRIPT_DIR=%~dp0"
 
 rem Resolve candidate exe paths (pre-build)
-set "EXE=%SCRIPT_DIR%FourAppSwitcher\bin\x64\Release\net8.0-windows\win-x64\publish\FourAppSwitcher.exe"
-if not exist "%EXE%" set "EXE=%SCRIPT_DIR%FourAppSwitcher\bin\Release\net8.0-windows\win-x64\publish\FourAppSwitcher.exe"
-if not exist "%EXE%" set "EXE=%SCRIPT_DIR%FourAppSwitcher\bin\x64\Release\net8.0-windows\win-x64\FourAppSwitcher.exe"
-if not exist "%EXE%" set "EXE=%SCRIPT_DIR%FourAppSwitcher\bin\Release\net8.0-windows\win-x64\FourAppSwitcher.exe"
+set "EXE=%SCRIPT_DIR%apps\AppSwitcher\bin\x64\Release\net8.0-windows\win-x64\publish\AppSwitcher.exe"
+if not exist "%EXE%" set "EXE=%SCRIPT_DIR%apps\AppSwitcher\bin\Release\net8.0-windows\win-x64\publish\AppSwitcher.exe"
+if not exist "%EXE%" set "EXE=%SCRIPT_DIR%apps\AppSwitcher\bin\x64\Release\net8.0-windows\win-x64\AppSwitcher.exe"
+if not exist "%EXE%" set "EXE=%SCRIPT_DIR%apps\AppSwitcher\bin\Release\net8.0-windows\win-x64\AppSwitcher.exe"
 
 if not exist "%EXE%" (
   call "%SCRIPT_DIR%build.bat" || exit /b 1
 )
 
 rem Re-resolve after build to prefer publish x64
-set "EXE=%SCRIPT_DIR%FourAppSwitcher\bin\x64\Release\net8.0-windows\win-x64\publish\FourAppSwitcher.exe"
-if not exist "%EXE%" set "EXE=%SCRIPT_DIR%FourAppSwitcher\bin\Release\net8.0-windows\win-x64\publish\FourAppSwitcher.exe"
-if not exist "%EXE%" set "EXE=%SCRIPT_DIR%FourAppSwitcher\bin\x64\Release\net8.0-windows\win-x64\FourAppSwitcher.exe"
-if not exist "%EXE%" set "EXE=%SCRIPT_DIR%FourAppSwitcher\bin\Release\net8.0-windows\win-x64\FourAppSwitcher.exe"
+set "EXE=%SCRIPT_DIR%apps\AppSwitcher\bin\x64\Release\net8.0-windows\win-x64\publish\AppSwitcher.exe"
+if not exist "%EXE%" set "EXE=%SCRIPT_DIR%apps\AppSwitcher\bin\Release\net8.0-windows\win-x64\publish\AppSwitcher.exe"
+if not exist "%EXE%" set "EXE=%SCRIPT_DIR%apps\AppSwitcher\bin\x64\Release\net8.0-windows\win-x64\AppSwitcher.exe"
+if not exist "%EXE%" set "EXE=%SCRIPT_DIR%apps\AppSwitcher\bin\Release\net8.0-windows\win-x64\AppSwitcher.exe"
 
 if not exist "%EXE%" (
   echo Could not locate FourAppSwitcher.exe after build.
