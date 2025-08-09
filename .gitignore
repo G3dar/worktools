@@ -1,0 +1,30 @@
+# Visual Studio / .NET / WPF
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build outputs
+**/bin/
+**/obj/
+**/PublishOutputs*.txt
+
+# Logs
+*.log
+
+# Rider/VS Code
+.idea/
+.vscode/
+
+# NuGet
+*.nupkg
+packages/
+
+# Generated/publish artifacts
+**/publish/
+
+# Misc
+Thumbs.db
+Desktop.ini
+
