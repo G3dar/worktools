@@ -28,8 +28,9 @@ public static class ShellHelpers
     [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
     [DllImport("user32.dll")] private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
     [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
-    // duplicate declaration exists below with SetLastError; keep only one. Removing this earlier duplicate.
     [DllImport("user32.dll")] private static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
+    [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
+    [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowTextLength(IntPtr hWnd);
@@ -38,6 +39,8 @@ public static class ShellHelpers
     private const int SW_SHOW = 5; private const int SW_RESTORE = 9;
     private const uint SWP_NOSIZE = 0x0001; private const uint SWP_NOMOVE = 0x0002; private const uint SWP_SHOWWINDOW = 0x0040;
     private static readonly IntPtr HWND_TOPMOST = new(-1); private static readonly IntPtr HWND_NOTOPMOST = new(-2);
+    private const uint GA_ROOTOWNER = 3;
+    private const uint GW_OWNER = 4;
 
     public static void ApplyTopmost(Window wpfWindow, bool topmost)
     {
@@ -253,6 +256,82 @@ public static class ShellHelpers
             }
         }
         catch { return null; }
+    }
+
+    public static BitmapSource? CaptureWindowGroupToBitmapSource(IntPtr target)
+    {
+        try
+        {
+            if (!IsWindowValid(target)) return null;
+            GetWindowThreadProcessId(target, out var pid);
+            var group = new List<IntPtr>();
+            // Collect ALL visible top-level windows that belong to the same process (covers tool windows not owned by the main root)
+            EnumWindows((h, l) =>
+            {
+                if (!IsWindowVisible(h)) return true;
+                GetWindowThreadProcessId(h, out var wpid);
+                if (wpid == pid) group.Add(h);
+                return true;
+            }, IntPtr.Zero);
+            if (group.Count == 0) group.Add(target);
+
+            RECT? union = null;
+            foreach (var h in group)
+            {
+                if (TryGetWindowBounds(h, out var rc))
+                {
+                    union = union == null ? rc : Union(union.Value, rc);
+                }
+            }
+            if (union == null) return null;
+            var u = union.Value;
+            int width = Math.Max(1, u.Right - u.Left);
+            int height = Math.Max(1, u.Bottom - u.Top);
+
+            using var bmp = new System.Drawing.Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (var g = System.Drawing.Graphics.FromImage(bmp))
+            {
+                g.Clear(System.Drawing.Color.Transparent);
+                foreach (var h in group)
+                {
+                    if (!TryGetWindowBounds(h, out var rc)) continue;
+                    int ox = rc.Left - u.Left;
+                    int oy = rc.Top - u.Top;
+                    using (var sub = new System.Drawing.Bitmap(Math.Max(1, rc.Right - rc.Left), Math.Max(1, rc.Bottom - rc.Top), System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+                    {
+                        using (var sg = System.Drawing.Graphics.FromImage(sub))
+                        {
+                            IntPtr hdc = sg.GetHdc(); bool printed = false; try { printed = PrintWindow(h, hdc, 2); } catch { printed = false; } sg.ReleaseHdc(hdc);
+                            if (!printed)
+                            {
+                                try { sg.CopyFromScreen(rc.Left, rc.Top, 0, 0, new System.Drawing.Size(sub.Width, sub.Height)); } catch { }
+                            }
+                        }
+                        g.DrawImageUnscaled(sub, ox, oy);
+                    }
+                }
+            }
+            var hb = bmp.GetHbitmap();
+            try
+            {
+                var src = System.Windows.Interop.Imaging.CreateBitmapSourceFromHBitmap(hb, IntPtr.Zero, System.Windows.Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+                src.Freeze();
+                return src;
+            }
+            finally { DeleteObject(hb); }
+        }
+        catch { return null; }
+    }
+
+    private static RECT Union(RECT a, RECT b)
+    {
+        return new RECT
+        {
+            Left = Math.Min(a.Left, b.Left),
+            Top = Math.Min(a.Top, b.Top),
+            Right = Math.Max(a.Right, b.Right),
+            Bottom = Math.Max(a.Bottom, b.Bottom)
+        };
     }
 
     private static bool TryGetWindowBounds(IntPtr hWnd, out RECT rect)

@@ -208,6 +208,27 @@ public partial class MainWindow : Window
     private ContextMenu BuildSlotContextMenu(int slotIndex)
     {
         var ctx = new ContextMenu();
+        // Clear first
+        var clear = new MenuItem { Header = "Clear slot" };
+        clear.Click += async (_, _) =>
+        {
+            var s = _config.Slots[slotIndex];
+            s.TargetPath = null;
+            s.Arguments = null;
+            s.WorkingDirectory = null;
+            s.AppUserModelId = null;
+            s.ProcessId = null;
+            s.WindowTitle = null;
+            s.Hwnd = null; s.BoundsLeft = null; s.BoundsTop = null; s.BoundsWidth = null; s.BoundsHeight = null;
+            s.CustomLabel = null;
+            s.CustomIconPath = null;
+            s.BackgroundHex = null;
+            ApplyIcons();
+            await SaveAsync();
+        };
+        ctx.Items.Add(clear);
+
+        ctx.Items.Add(new Separator());
         var rename = new MenuItem { Header = "Rename" };
         rename.Click += async (_, _) => await RenameSlotAsync(slotIndex);
         ctx.Items.Add(rename);
@@ -219,25 +240,6 @@ public partial class MainWindow : Window
         var changeBg = new MenuItem { Header = "Change background color..." };
         changeBg.Click += (_, _) => ChangeSlotBackground(slotIndex);
         ctx.Items.Add(changeBg);
-
-        ctx.Items.Add(new Separator());
-        var clear = new MenuItem { Header = "Clear slot" };
-        clear.Click += async (_, _) =>
-        {
-            var s = _config.Slots[slotIndex];
-            s.TargetPath = null;
-            s.Arguments = null;
-            s.WorkingDirectory = null;
-            s.AppUserModelId = null;
-            s.ProcessId = null;
-            s.WindowTitle = null;
-            s.CustomLabel = null;
-            s.CustomIconPath = null;
-            s.BackgroundHex = null;
-            ApplyIcons();
-            await SaveAsync();
-        };
-        ctx.Items.Add(clear);
 
         return ctx;
     }
@@ -439,7 +441,8 @@ public partial class MainWindow : Window
         var slot = _config.Slots[idx];
         var hWnd = ResolveWindowHandleForSlot(slot);
         if (hWnd == IntPtr.Zero) return;
-        var bmp = ShellHelpers.CaptureWindowToBitmapSource(hWnd);
+        // Capture group (root owner + owned popups) so peripheral windows are included
+        var bmp = ShellHelpers.CaptureWindowGroupToBitmapSource(hWnd) ?? ShellHelpers.CaptureWindowToBitmapSource(hWnd);
         if (bmp != null)
         {
             try
@@ -558,14 +561,20 @@ public partial class MainWindow : Window
         ctx.Items.Add(renameHeader);
 
         var layout = new MenuItem { Header = "Layout" };
-        var layout4 = new MenuItem { Header = "4 slots (1 row)" };
-        layout4.Click += async (_, _) => { _config.Rows = 1; _config.Columns = 4; BuildSlotsUI(); ApplyIcons(); await SaveAsync(); };
-        var layout8 = new MenuItem { Header = "8 slots (2 rows)" };
-        layout8.Click += async (_, _) => { _config.Rows = 2; _config.Columns = 4; BuildSlotsUI(); ApplyIcons(); await SaveAsync(); };
+        var preset14 = new MenuItem { Header = "1 x 4" };
+        preset14.Click += async (_, _) => { _config.Rows = 1; _config.Columns = 4; BuildSlotsUI(); ApplyIcons(); await SaveAsync(); };
+        var preset22 = new MenuItem { Header = "2 x 2" };
+        preset22.Click += async (_, _) => { _config.Rows = 2; _config.Columns = 2; BuildSlotsUI(); ApplyIcons(); await SaveAsync(); };
+        var preset24 = new MenuItem { Header = "2 x 4" };
+        preset24.Click += async (_, _) => { _config.Rows = 2; _config.Columns = 4; BuildSlotsUI(); ApplyIcons(); await SaveAsync(); };
+        var preset16 = new MenuItem { Header = "1 x 6" };
+        preset16.Click += async (_, _) => { _config.Rows = 1; _config.Columns = 6; BuildSlotsUI(); ApplyIcons(); await SaveAsync(); };
         var layoutCustom = new MenuItem { Header = "Configure rows/columns..." };
         layoutCustom.Click += async (_, _) => await ConfigureLayoutAsync();
-        layout.Items.Add(layout4);
-        layout.Items.Add(layout8);
+        layout.Items.Add(preset14);
+        layout.Items.Add(preset22);
+        layout.Items.Add(preset24);
+        layout.Items.Add(preset16);
         layout.Items.Add(new Separator());
         layout.Items.Add(layoutCustom);
         ctx.Items.Add(layout);
@@ -603,6 +612,8 @@ public partial class MainWindow : Window
         var tb = new System.Windows.Controls.TextBox { Margin = new Thickness(8), Text = slot.CustomLabel ?? string.Empty };
         var ok = new System.Windows.Controls.Button { Content = "Save", Margin = new Thickness(8), HorizontalAlignment = System.Windows.HorizontalAlignment.Right, Width = 72 };
         ok.Click += (_, _) => w.DialogResult = true;
+        tb.KeyDown += (s, e) => { if (e.Key == Key.Enter) { w.DialogResult = true; e.Handled = true; } };
+        w.Loaded += (_, _) => { tb.Focus(); tb.SelectAll(); };
         var panel = new DockPanel();
         DockPanel.SetDock(ok, Dock.Bottom);
         panel.Children.Add(ok);
