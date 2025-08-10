@@ -12,6 +12,7 @@ using WinForms = System.Windows.Forms;
 using System.Windows.Interop;
 using System.Runtime.InteropServices;
 using Media = System.Windows.Media;
+using System.Windows.Threading;
 
 namespace AppSwitcher;
 
@@ -23,6 +24,7 @@ public partial class MainWindow : Window
     private int _registeredHotkeyCount = 0;
     private IntPtr _lastExternalHwnd = IntPtr.Zero;
     private string? _lastExternalExe;
+    private DispatcherTimer? _foregroundTimer;
 
     public MainWindow()
     {
@@ -37,7 +39,6 @@ public partial class MainWindow : Window
         _config = await ConfigService.LoadAsync();
         Left = _config.Left;
         Top = _config.Top;
-        AlwaysOnTopToggle.IsChecked = _config.AlwaysOnTop;
         Topmost = _config.AlwaysOnTop;
         ShellHelpers.ApplyTopmost(this, _config.AlwaysOnTop);
         if (_config.Rows <= 0) _config.Rows = 1;
@@ -47,6 +48,7 @@ public partial class MainWindow : Window
         SizeToContent = SizeToContent.Manual;
         InitTrayIcon();
         InitHotkeys();
+        StartForegroundWatcher();
     }
 
     private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -152,11 +154,11 @@ public partial class MainWindow : Window
         for (int i = 0; i < total; i++)
         {
             var img = new System.Windows.Controls.Image { Width = _config.IconSize, Height = _config.IconSize };
-            var title = new TextBlock { Text = GetShortLabel(_config.Slots[i]), Foreground = Media.Brushes.Gainsboro, HorizontalAlignment = System.Windows.HorizontalAlignment.Center, FontSize = 12, Margin = new Thickness(0, 0, 0, 6) };
+            var title = new TextBlock { Text = GetShortLabel(_config.Slots[i]), Foreground = Media.Brushes.Gainsboro, HorizontalAlignment = System.Windows.HorizontalAlignment.Center, FontSize = 11, Margin = new Thickness(0, 0, 0, 4) };
             var stack = new StackPanel();
             stack.Children.Add(title);
             stack.Children.Add(img);
-            var btn = new System.Windows.Controls.Button { Style = (Style)FindResource("IconButtonStyle"), AllowDrop = true, Height = _config.IconSize + 30, Content = stack, Margin = new Thickness(6) };
+            var btn = new System.Windows.Controls.Button { Style = (Style)FindResource("IconButtonStyle"), AllowDrop = true, Height = _config.IconSize + 22, Content = stack, Margin = new Thickness(4) };
             btn.Drop += Slot_Drop;
             btn.DragOver += Slot_DragOver;
             btn.Click += Slot_Click;
@@ -193,7 +195,7 @@ public partial class MainWindow : Window
             s.img.Width = s.img.Height = newSize;
             if (s.btn.Content is StackPanel)
             {
-                s.btn.Height = newSize + titleReserve + 20;
+                s.btn.Height = newSize + titleReserve + 16;
             }
         }
     }
@@ -389,21 +391,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void AlwaysOnTopToggle_Checked(object sender, RoutedEventArgs e)
-    {
-        Topmost = true;
-        ShellHelpers.ApplyTopmost(this, true);
-        _config.AlwaysOnTop = true;
-        await SaveAsync();
-    }
-
-    private async void AlwaysOnTopToggle_Unchecked(object sender, RoutedEventArgs e)
-    {
-        Topmost = false;
-        ShellHelpers.ApplyTopmost(this, false);
-        _config.AlwaysOnTop = false;
-        await SaveAsync();
-    }
+    // Always-on-top now controlled via menu
 
     private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
@@ -416,6 +404,16 @@ public partial class MainWindow : Window
     private async void MenuButton_Click(object sender, RoutedEventArgs e)
     {
         var ctx = new ContextMenu();
+        var aot = new MenuItem { Header = this.Topmost ? "Always on top ✓" : "Always on top" };
+        aot.Click += async (_, _) =>
+        {
+            Topmost = !Topmost;
+            ShellHelpers.ApplyTopmost(this, Topmost);
+            _config.AlwaysOnTop = Topmost;
+            await SaveAsync();
+        };
+        ctx.Items.Add(aot);
+        ctx.Items.Add(new Separator());
         var assignMenu = new MenuItem { Header = "Assign from running (pick window)..." };
         assignMenu.Click += AssignFromRunning_Click;
         ctx.Items.Add(assignMenu);
@@ -550,12 +548,36 @@ public partial class MainWindow : Window
     {
         await SaveAsync();
         TeardownHotkeys();
+        try { _foregroundTimer?.Stop(); _foregroundTimer = null; } catch { }
         if (_tray != null)
         {
             _tray.Visible = false;
             _tray.Dispose();
             _tray = null;
         }
+    }
+
+    private void StartForegroundWatcher()
+    {
+        try
+        {
+            _foregroundTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+            _foregroundTimer.Tick += (_, _) =>
+            {
+                try
+                {
+                    var (h, p, exe) = ShellHelpers.GetActiveWindowProcess();
+                    if (h == IntPtr.Zero || string.IsNullOrEmpty(exe)) return;
+                    var my = new WindowInteropHelper(this).Handle;
+                    if (h == my) return;
+                    _lastExternalHwnd = h;
+                    _lastExternalExe = exe;
+                }
+                catch { }
+            };
+            _foregroundTimer.Start();
+        }
+        catch { }
     }
 
     private void InitTrayIcon()
