@@ -149,9 +149,11 @@ public partial class MainWindow : Window
         _dynamicSlots.Clear();
         SlotsGrid.Children.Clear();
         SlotsGrid.Columns = _config.Columns <= 0 ? 4 : _config.Columns;
-        int total = Math.Min(Math.Max(1, _config.Rows) * SlotsGrid.Columns, 8);
-        EnsureSlotsCount(total);
-        for (int i = 0; i < total; i++)
+        int desiredVisible = Math.Max(1, _config.Rows) * Math.Max(1, _config.Columns);
+        desiredVisible = Math.Min(desiredVisible, 64); // hard cap
+        // Ensure backing store can hold at least desiredVisible, but keep any existing beyond
+        EnsureSlotsCount(desiredVisible);
+        for (int i = 0; i < desiredVisible; i++)
         {
             var img = new System.Windows.Controls.Image { Width = _config.IconSize, Height = _config.IconSize };
             var title = new TextBlock { Text = GetShortLabel(_config.Slots[i]), Foreground = Media.Brushes.Gainsboro, HorizontalAlignment = System.Windows.HorizontalAlignment.Center, FontSize = 11, Margin = new Thickness(0, 0, 0, 4) };
@@ -170,14 +172,14 @@ public partial class MainWindow : Window
         // Rebind hotkeys if already initialized
         if (_hwndSource != null)
         {
-            RegisterHotkeysForCount(Math.Min(_dynamicSlots.Count, 8));
+            RegisterHotkeysForCount(Math.Min(_dynamicSlots.Count, 9));
         }
     }
 
     private void EnsureSlotsCount(int total)
     {
         while (_config.Slots.Count < total) _config.Slots.Add(new AppSlotConfig());
-        if (_config.Slots.Count > total) _config.Slots = _config.Slots.Take(total).ToList();
+        // Do NOT truncate when shrinking layout; preserve hidden slots for future expansions
     }
 
     private void UpdateIconSizesFromWindow()
@@ -185,8 +187,8 @@ public partial class MainWindow : Window
         if (_dynamicSlots.Count == 0) return;
         var rows = Math.Max(1, _config.Rows);
         var cols = Math.Max(1, _config.Columns);
-        double cellWidth = Math.Max(40, (SlotsGrid.ActualWidth / cols) - 12);
-        double cellHeight = Math.Max(40, (SlotsGrid.ActualHeight / rows) - 12);
+        double cellWidth = Math.Max(36, (SlotsGrid.ActualWidth / cols) - 8);
+        double cellHeight = Math.Max(36, (SlotsGrid.ActualHeight / rows) - 8);
         double titleReserve = 22;
         double newSize = Math.Max(32, Math.Min(cellWidth, cellHeight - titleReserve));
         _config.IconSize = newSize;
@@ -441,8 +443,12 @@ public partial class MainWindow : Window
         layout4.Click += async (_, _) => { _config.Rows = 1; _config.Columns = 4; BuildSlotsUI(); ApplyIcons(); await SaveAsync(); };
         var layout8 = new MenuItem { Header = "8 slots (2 rows)" };
         layout8.Click += async (_, _) => { _config.Rows = 2; _config.Columns = 4; BuildSlotsUI(); ApplyIcons(); await SaveAsync(); };
+        var layoutCustom = new MenuItem { Header = "Configure rows/columns..." };
+        layoutCustom.Click += async (_, _) => await ConfigureLayoutAsync();
         layout.Items.Add(layout4);
         layout.Items.Add(layout8);
+        layout.Items.Add(new Separator());
+        layout.Items.Add(layoutCustom);
         ctx.Items.Add(layout);
 
         var clearAll = new MenuItem { Header = "Clear all" };
@@ -488,6 +494,46 @@ public partial class MainWindow : Window
             slot.CustomLabel = string.IsNullOrWhiteSpace(tb.Text) ? null : tb.Text.Trim();
             ApplyIcons();
             await SaveAsync();
+        }
+    }
+
+    private async Task ConfigureLayoutAsync()
+    {
+        var w = new Window
+        {
+            Title = "Configure layout (rows x columns)", Width = 320, Height = 180,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner, Owner = this, ResizeMode = ResizeMode.NoResize
+        };
+        var rowsBox = new System.Windows.Controls.TextBox { Margin = new Thickness(8), Text = _config.Rows.ToString() };
+        var colsBox = new System.Windows.Controls.TextBox { Margin = new Thickness(8), Text = _config.Columns.ToString() };
+        var grid = new Grid();
+        grid.RowDefinitions.Add(new RowDefinition());
+        grid.RowDefinitions.Add(new RowDefinition());
+        grid.RowDefinitions.Add(new RowDefinition());
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.Children.Add(new TextBlock { Text = "Rows:", Margin = new Thickness(8), VerticalAlignment = VerticalAlignment.Center });
+        Grid.SetRow(rowsBox, 0); Grid.SetColumn(rowsBox, 1); grid.Children.Add(rowsBox);
+        Grid.SetRow(new TextBlock { Text = "Columns:", Margin = new Thickness(8), VerticalAlignment = VerticalAlignment.Center }, 1);
+        var colsLabel = new TextBlock { Text = "Columns:", Margin = new Thickness(8), VerticalAlignment = VerticalAlignment.Center };
+        Grid.SetRow(colsLabel, 1); Grid.SetColumn(colsLabel, 0); grid.Children.Add(colsLabel);
+        Grid.SetRow(colsBox, 1); Grid.SetColumn(colsBox, 1); grid.Children.Add(colsBox);
+        var ok = new System.Windows.Controls.Button { Content = "Apply", Margin = new Thickness(8), HorizontalAlignment = System.Windows.HorizontalAlignment.Right, Width = 72 };
+        ok.Click += (_, _) => w.DialogResult = true;
+        Grid.SetRow(ok, 2); Grid.SetColumn(ok, 1); grid.Children.Add(ok);
+        w.Content = grid;
+        if (w.ShowDialog() == true)
+        {
+            if (int.TryParse(rowsBox.Text, out var r) && int.TryParse(colsBox.Text, out var c))
+            {
+                r = Math.Max(1, Math.Min(8, r));
+                c = Math.Max(1, Math.Min(8, c));
+                _config.Rows = r;
+                _config.Columns = c;
+                BuildSlotsUI();
+                ApplyIcons();
+                await SaveAsync();
+            }
         }
     }
 
@@ -678,7 +724,7 @@ public partial class MainWindow : Window
             _hwndSource = HwndSource.FromHwnd(helper.Handle);
             if (_hwndSource == null) return;
             _hwndSource.AddHook(WndProcHook);
-            RegisterHotkeysForCount(Math.Min(_dynamicSlots.Count, 8));
+            RegisterHotkeysForCount(Math.Min(_dynamicSlots.Count, 9));
         }
         catch { }
     }
@@ -709,7 +755,7 @@ public partial class MainWindow : Window
                 UnregisterHotKey(handle, 9001 + i);
             }
             // Register Ctrl+Alt+1..count
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < count && i < 9; i++)
             {
                 RegisterHotKey(handle, 9001 + i, MOD_CONTROL | MOD_ALT, (uint)(0x31 + i));
             }
