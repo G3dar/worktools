@@ -21,12 +21,15 @@ public partial class MainWindow : Window
     private WinForms.NotifyIcon? _tray;
     private HwndSource? _hwndSource;
     private int _registeredHotkeyCount = 0;
+    private IntPtr _lastExternalHwnd = IntPtr.Zero;
+    private string? _lastExternalExe;
 
     public MainWindow()
     {
         InitializeComponent();
         this.AllowsTransparency = true;
         this.Topmost = true;
+        this.PreviewMouseDown += OnPreviewMouseDownCapture;
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -51,6 +54,21 @@ public partial class MainWindow : Window
         UpdateIconSizesFromWindow();
     }
 
+    private void OnPreviewMouseDownCapture(object sender, MouseButtonEventArgs e)
+    {
+        try
+        {
+            var (h, p, exe) = ShellHelpers.GetActiveWindowProcess();
+            var my = new WindowInteropHelper(this).Handle;
+            if (h != IntPtr.Zero && h != my && !string.IsNullOrEmpty(exe))
+            {
+                _lastExternalHwnd = h;
+                _lastExternalExe = exe;
+            }
+        }
+        catch { }
+    }
+
     private void ApplyIcons()
     {
         int total = _dynamicSlots.Count;
@@ -59,17 +77,51 @@ public partial class MainWindow : Window
             var (img, title, btn) = _dynamicSlots[i];
             var slot = _config.Slots[i];
             img.Width = img.Height = _config.IconSize;
-            title.Text = slot.FriendlyName ?? $"Slot {i + 1}";
+            title.Text = GetShortLabel(slot);
             if (!string.IsNullOrEmpty(slot.TargetPath))
             {
-                var icon = ShellHelpers.ExtractIconImageSource(slot.TargetPath, (int)_config.IconSize);
+                BitmapSource? icon = null;
+                if (!string.IsNullOrWhiteSpace(slot.CustomIconPath) && File.Exists(slot.CustomIconPath))
+                {
+                    try { icon = new BitmapImage(new Uri(slot.CustomIconPath)); } catch { }
+                }
+                icon ??= ShellHelpers.ExtractIconImageSource(slot.TargetPath, (int)_config.IconSize);
                 img.Source = icon ?? CreatePlaceholderIcon();
             }
             else
             {
                 img.Source = CreatePlusPlaceholder();
             }
+
+            try
+            {
+                var hex = string.IsNullOrWhiteSpace(slot.BackgroundHex) ? null : slot.BackgroundHex;
+                var bgBrush = (Media.SolidColorBrush)(new Media.BrushConverter().ConvertFromString(hex ?? "#1E1E1E") ?? Media.Brushes.Transparent);
+                btn.Background = bgBrush;
+                title.Foreground = GetContrastingTextBrush(bgBrush.Color);
+            }
+            catch { title.Foreground = Media.Brushes.Gainsboro; }
         }
+    }
+
+    private static Media.Brush GetContrastingTextBrush(Media.Color bg)
+    {
+        double brightness = (0.299 * bg.R + 0.587 * bg.G + 0.114 * bg.B) / 255.0;
+        return brightness > 0.6 ? Media.Brushes.Black : Media.Brushes.Gainsboro;
+    }
+
+    private static string GetShortLabel(AppSlotConfig slot)
+    {
+        // Prefer custom label; else first 10 chars of the window title.
+        if (!string.IsNullOrWhiteSpace(slot.CustomLabel))
+        {
+            var c = slot.CustomLabel!.Trim();
+            return c.Length <= 10 ? c : c.Substring(0, 10);
+        }
+        var t = slot.WindowTitle;
+        if (string.IsNullOrWhiteSpace(t)) return string.Empty;
+        t = t.Trim();
+        return t.Length <= 10 ? t : t.Substring(0, 10);
     }
 
     private static ImageSource CreatePlaceholderIcon()
@@ -100,7 +152,7 @@ public partial class MainWindow : Window
         for (int i = 0; i < total; i++)
         {
             var img = new System.Windows.Controls.Image { Width = _config.IconSize, Height = _config.IconSize };
-            var title = new TextBlock { Text = _config.Slots[i].FriendlyName ?? $"Slot {i + 1}", Foreground = Media.Brushes.Gainsboro, HorizontalAlignment = System.Windows.HorizontalAlignment.Center, FontSize = 12, Margin = new Thickness(0, 0, 0, 6) };
+            var title = new TextBlock { Text = GetShortLabel(_config.Slots[i]), Foreground = Media.Brushes.Gainsboro, HorizontalAlignment = System.Windows.HorizontalAlignment.Center, FontSize = 12, Margin = new Thickness(0, 0, 0, 6) };
             var stack = new StackPanel();
             stack.Children.Add(title);
             stack.Children.Add(img);
@@ -108,6 +160,7 @@ public partial class MainWindow : Window
             btn.Drop += Slot_Drop;
             btn.DragOver += Slot_DragOver;
             btn.Click += Slot_Click;
+            btn.ContextMenu = BuildSlotContextMenu(i);
             SlotsGrid.Children.Add(btn);
             _dynamicSlots.Add((img, title, btn));
         }
@@ -143,6 +196,91 @@ public partial class MainWindow : Window
                 s.btn.Height = newSize + titleReserve + 20;
             }
         }
+    }
+
+    private ContextMenu BuildSlotContextMenu(int slotIndex)
+    {
+        var ctx = new ContextMenu();
+        var rename = new MenuItem { Header = "Rename" };
+        rename.Click += async (_, _) => await RenameSlotAsync(slotIndex);
+        ctx.Items.Add(rename);
+
+        var changeIcon = new MenuItem { Header = "Change icon..." };
+        changeIcon.Click += (_, _) => ChangeSlotIcon(slotIndex);
+        ctx.Items.Add(changeIcon);
+
+        var changeBg = new MenuItem { Header = "Change background color..." };
+        changeBg.Click += (_, _) => ChangeSlotBackground(slotIndex);
+        ctx.Items.Add(changeBg);
+
+        ctx.Items.Add(new Separator());
+        var clear = new MenuItem { Header = "Clear slot" };
+        clear.Click += async (_, _) =>
+        {
+            var s = _config.Slots[slotIndex];
+            s.TargetPath = null;
+            s.Arguments = null;
+            s.WorkingDirectory = null;
+            s.AppUserModelId = null;
+            s.ProcessId = null;
+            s.WindowTitle = null;
+            s.CustomLabel = null;
+            s.CustomIconPath = null;
+            s.BackgroundHex = null;
+            ApplyIcons();
+            await SaveAsync();
+        };
+        ctx.Items.Add(clear);
+
+        return ctx;
+    }
+
+    private void ChangeSlotIcon(int slotIndex)
+    {
+        try
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Choose icon image",
+                Filter = "Images|*.png;*.jpg;*.jpeg;*.ico;*.bmp|All files|*.*"
+            };
+            if (dlg.ShowDialog(this) == true)
+            {
+                _config.Slots[slotIndex].CustomIconPath = dlg.FileName;
+                ApplyIcons();
+                _ = SaveAsync();
+            }
+        }
+        catch { }
+    }
+
+    private void ChangeSlotBackground(int slotIndex)
+    {
+        try
+        {
+            var dlg = new WinForms.ColorDialog { FullOpen = true };
+            // Seed current color if valid
+            try
+            {
+                var hex = _config.Slots[slotIndex].BackgroundHex;
+                if (!string.IsNullOrWhiteSpace(hex))
+                {
+                    var brush = (Media.SolidColorBrush)(new Media.BrushConverter().ConvertFromString(hex) ?? Media.Brushes.Transparent);
+                    var c = ((Media.SolidColorBrush)brush).Color;
+                    dlg.Color = System.Drawing.Color.FromArgb(c.R, c.G, c.B);
+                }
+            }
+            catch { }
+
+            if (dlg.ShowDialog() == WinForms.DialogResult.OK)
+            {
+                var c = dlg.Color;
+                _config.Slots[slotIndex].BackgroundHex = $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+                ApplyIcons();
+                _ = SaveAsync();
+            }
+        }
+        catch { }
     }
 
     private async Task SaveAsync()
@@ -194,7 +332,6 @@ public partial class MainWindow : Window
             slot.TargetPath = target;
             slot.Arguments = args;
             slot.WorkingDirectory = work;
-            slot.FriendlyName = Path.GetFileNameWithoutExtension(target);
             ApplyIcons();
             await SaveAsync();
         }
@@ -206,7 +343,21 @@ public partial class MainWindow : Window
         var idx = SlotIndexFromSender(sender);
         if (idx < 0) return;
         var slot = _config.Slots[idx];
-        if (string.IsNullOrWhiteSpace(slot.TargetPath)) return;
+        if (string.IsNullOrWhiteSpace(slot.TargetPath))
+        {
+            // Try assign from last captured external or current foreground
+            var assigned = await TryAssignFromLastExternalAsync(idx);
+            if (!assigned)
+            {
+                assigned = await AssignFromCurrentForegroundAsync(idx);
+            }
+            if (assigned)
+            {
+                ApplyIcons();
+                await SaveAsync();
+            }
+            return;
+        }
 
         if (slot.ProcessId is int pid)
         {
@@ -326,7 +477,7 @@ public partial class MainWindow : Window
             Owner = this,
             ResizeMode = ResizeMode.NoResize
         };
-        var tb = new System.Windows.Controls.TextBox { Margin = new Thickness(8), Text = slot.FriendlyName ?? string.Empty };
+        var tb = new System.Windows.Controls.TextBox { Margin = new Thickness(8), Text = slot.CustomLabel ?? string.Empty };
         var ok = new System.Windows.Controls.Button { Content = "Save", Margin = new Thickness(8), HorizontalAlignment = System.Windows.HorizontalAlignment.Right, Width = 72 };
         ok.Click += (_, _) => w.DialogResult = true;
         var panel = new DockPanel();
@@ -336,7 +487,7 @@ public partial class MainWindow : Window
         w.Content = panel;
         if (w.ShowDialog() == true)
         {
-            slot.FriendlyName = string.IsNullOrWhiteSpace(tb.Text) ? null : tb.Text.Trim();
+            slot.CustomLabel = string.IsNullOrWhiteSpace(tb.Text) ? null : tb.Text.Trim();
             ApplyIcons();
             await SaveAsync();
         }
@@ -386,7 +537,6 @@ public partial class MainWindow : Window
                     slot.TargetPath = exe;
                     slot.Arguments = null;
                     slot.WorkingDirectory = Path.GetDirectoryName(exe);
-                    slot.FriendlyName = string.IsNullOrWhiteSpace(p.MainWindowTitle) ? p.ProcessName : p.MainWindowTitle;
                     slot.ProcessId = p.Id;
                     slot.WindowTitle = p.MainWindowTitle;
                     ApplyIcons();
@@ -445,11 +595,49 @@ public partial class MainWindow : Window
         slot.Arguments = null;
         slot.WorkingDirectory = Path.GetDirectoryName(exe);
         var activeTitle = ShellHelpers.GetWindowTitle(hWnd);
-        slot.FriendlyName = string.IsNullOrWhiteSpace(activeTitle) ? (string.IsNullOrWhiteSpace(process.MainWindowTitle) ? process.ProcessName : process.MainWindowTitle) : activeTitle;
         slot.ProcessId = process.Id;
         slot.WindowTitle = string.IsNullOrWhiteSpace(activeTitle) ? process.MainWindowTitle : activeTitle;
         ApplyIcons();
         await SaveAsync();
+    }
+
+    private async Task<bool> TryAssignFromLastExternalAsync(int slotIndex)
+    {
+        try
+        {
+            var hWnd = _lastExternalHwnd;
+            var exe = _lastExternalExe;
+            if (hWnd == IntPtr.Zero || string.IsNullOrEmpty(exe)) return false;
+            var slot = _config.Slots[slotIndex];
+            slot.TargetPath = exe;
+            slot.Arguments = null;
+            slot.WorkingDirectory = Path.GetDirectoryName(exe);
+            slot.ProcessId = null;
+            slot.WindowTitle = ShellHelpers.GetWindowTitle(hWnd);
+            await SaveAsync();
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private async Task<bool> AssignFromCurrentForegroundAsync(int slotIndex)
+    {
+        try
+        {
+            var (hWnd, process, exe) = ShellHelpers.GetActiveWindowProcess();
+            if (hWnd == IntPtr.Zero || process == null || string.IsNullOrEmpty(exe)) return false;
+            var my = new WindowInteropHelper(this).Handle;
+            if (hWnd == my) return false;
+            var slot = _config.Slots[slotIndex];
+            slot.TargetPath = exe;
+            slot.Arguments = null;
+            slot.WorkingDirectory = Path.GetDirectoryName(exe);
+            slot.ProcessId = process.Id;
+            slot.WindowTitle = ShellHelpers.GetWindowTitle(hWnd);
+            await SaveAsync();
+            return true;
+        }
+        catch { return false; }
     }
 
     private const int WM_HOTKEY = 0x0312;

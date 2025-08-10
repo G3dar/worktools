@@ -19,19 +19,19 @@ if not exist "%EXE%" set "EXE=%SCRIPT_DIR%apps\AppSwitcher\bin\x64\Release\net8.
 if not exist "%EXE%" set "EXE=%SCRIPT_DIR%apps\AppSwitcher\bin\Release\net8.0-windows\win-x64\AppSwitcher.exe"
 
 if not exist "%EXE%" (
-  echo Could not locate FourAppSwitcher.exe after build.
+  echo Could not locate AppSwitcher.exe after build.
   exit /b 1
 )
 
-echo Stopping any running FourAppSwitcher.exe ...
-taskkill /F /IM FourAppSwitcher.exe >nul 2>nul
+echo Stopping any running AppSwitcher.exe ...
+taskkill /F /IM AppSwitcher.exe >nul 2>nul
 timeout /t 1 /nobreak >nul 2>&1
 
 for %%A in ("%EXE%") do set "EXE_DIR=%%~dpA"
 set "PATH=%EXE_DIR%;%PATH%"
 
 echo Starting: "%EXE%"
-start "FourAppSwitcher" "%EXE%"
+start "AppSwitcher" "%EXE%"
 exit /b 0
 
 
