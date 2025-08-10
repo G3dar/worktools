@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>appswitcher</id>
+    <version>0.1.0</version>
+    <title>AppSwitcher</title>
+    <authors>G3dar</authors>
+    <owners>G3dar</owners>
+    <projectUrl>https://github.com/G3dar/worktools</projectUrl>
+    <licenseUrl>https://raw.githubusercontent.com/G3dar/worktools/main/packaging/LICENSE.txt</licenseUrl>
+    <projectSourceUrl>https://github.com/G3dar/worktools</projectSourceUrl>
+    <bugTrackerUrl>https://github.com/G3dar/worktools/issues</bugTrackerUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>Always-on-top app switcher toolbar with 4–8 slots, per-slot labels, tray menu, drag-and-drop assignment, global hotkeys, and persistence.</description>
+    <summary>Portable EXE; Chocolatey will shim AppSwitcher.exe to PATH.</summary>
+    <tags>switcher toolbar productivity wpf</tags>
+    <packageSourceUrl>https://github.com/G3dar/worktools</packageSourceUrl>
+    <releaseNotes>https://github.com/G3dar/worktools/releases/tag/v0.1.0</releaseNotes>
+    <iconUrl>https://raw.githubusercontent.com/G3dar/worktools/main/apps/AppSwitcher/AppSwitcher.png</iconUrl>
+  </metadata>
+  <files>
+    <file src="..\apps\AppSwitcher\bin\Release\net8.0-windows\win-x64\publish\AppSwitcher.exe" target="tools\AppSwitcher.exe" />
+  </files>
+</package>
+

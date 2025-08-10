@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     private ToolbarConfig _config = new();
     private WinForms.NotifyIcon? _tray;
     private HwndSource? _hwndSource;
+    private int _registeredHotkeyCount = 0;
 
     public MainWindow()
     {
@@ -111,6 +112,11 @@ public partial class MainWindow : Window
             _dynamicSlots.Add((img, title, btn));
         }
         UpdateIconSizesFromWindow();
+        // Rebind hotkeys if already initialized
+        if (_hwndSource != null)
+        {
+            RegisterHotkeysForCount(Math.Min(_dynamicSlots.Count, 8));
+        }
     }
 
     private void EnsureSlotsCount(int total)
@@ -462,10 +468,7 @@ public partial class MainWindow : Window
             _hwndSource = HwndSource.FromHwnd(helper.Handle);
             if (_hwndSource == null) return;
             _hwndSource.AddHook(WndProcHook);
-            for (int i = 0; i < 4; i++)
-            {
-                RegisterHotKey(helper.Handle, 9001 + i, MOD_CONTROL | MOD_ALT, (uint)(0x31 + i));
-            }
+            RegisterHotkeysForCount(Math.Min(_dynamicSlots.Count, 8));
         }
         catch { }
     }
@@ -476,9 +479,31 @@ public partial class MainWindow : Window
         {
             var helper = new WindowInteropHelper(this);
             var handle = helper.Handle;
-            for (int i = 0; i < 4; i++) UnregisterHotKey(handle, 9001 + i);
+            for (int i = 0; i < _registeredHotkeyCount; i++) UnregisterHotKey(handle, 9001 + i);
             _hwndSource?.RemoveHook(WndProcHook);
             _hwndSource = null;
+            _registeredHotkeyCount = 0;
+        }
+        catch { }
+    }
+
+    private void RegisterHotkeysForCount(int count)
+    {
+        try
+        {
+            var helper = new WindowInteropHelper(this);
+            var handle = helper.Handle;
+            // Unregister previous
+            for (int i = 0; i < _registeredHotkeyCount; i++)
+            {
+                UnregisterHotKey(handle, 9001 + i);
+            }
+            // Register Ctrl+Alt+1..count
+            for (int i = 0; i < count; i++)
+            {
+                RegisterHotKey(handle, 9001 + i, MOD_CONTROL | MOD_ALT, (uint)(0x31 + i));
+            }
+            _registeredHotkeyCount = count;
         }
         catch { }
     }
