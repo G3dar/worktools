@@ -39,6 +39,8 @@ public partial class MainWindow : Window
         _config = await ConfigService.LoadAsync();
         Left = _config.Left;
         Top = _config.Top;
+        if (_config.Width > 0) Width = _config.Width;
+        if (_config.Height > 0) Height = _config.Height;
         Topmost = _config.AlwaysOnTop;
         ShellHelpers.ApplyTopmost(this, _config.AlwaysOnTop);
         if (_config.Rows <= 0) _config.Rows = 1;
@@ -163,7 +165,8 @@ public partial class MainWindow : Window
             var btn = new System.Windows.Controls.Button { Style = (Style)FindResource("IconButtonStyle"), AllowDrop = true, Height = _config.IconSize + 22, Content = stack, Margin = new Thickness(4) };
             btn.Drop += Slot_Drop;
             btn.DragOver += Slot_DragOver;
-            btn.Click += Slot_Click;
+        btn.Click += Slot_Click;
+        btn.MouseDoubleClick += Slot_DoubleClick;
             btn.ContextMenu = BuildSlotContextMenu(i);
             SlotsGrid.Children.Add(btn);
             _dynamicSlots.Add((img, title, btn));
@@ -363,16 +366,46 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (slot.ProcessId is int pid)
+        if (slot.ProcessId is int pid || slot.Hwnd.HasValue)
         {
             try
             {
-                var p = Process.GetProcessById(pid);
+                Process? p = null;
+                if (slot.ProcessId is int pidKnown)
+                {
+                    try { p = Process.GetProcessById(pidKnown); } catch { }
+                }
+                if (p == null && slot.Hwnd.HasValue)
+                {
+                    var maybePid = ShellHelpers.GetProcessIdForWindow(new IntPtr(slot.Hwnd.Value));
+                    if (maybePid is int mp) { try { p = Process.GetProcessById(mp); } catch { } }
+                }
                 if (p != null)
                 {
-                    var targetHwnd = ShellHelpers.FindWindowForProcessByTitle(pid, slot.WindowTitle);
+                    // Prefer persisted HWND if available and still valid
+                    IntPtr targetHwnd = IntPtr.Zero;
+                    if (slot.Hwnd.HasValue)
+                    {
+                        var h = new IntPtr(slot.Hwnd.Value);
+                        if (ShellHelpers.IsWindowValid(h)) targetHwnd = h;
+                    }
+                    if (targetHwnd == IntPtr.Zero)
+                    {
+                        targetHwnd = ShellHelpers.FindWindowForProcessByTitle(p.Id, slot.WindowTitle);
+                    }
+                    if (targetHwnd == IntPtr.Zero && slot.BoundsWidth.HasValue)
+                    {
+                        // As a last resort, pick a window of this process whose bounds best match stored bounds
+                        var candidates = ShellHelpers.EnumerateTopLevelWindowsForProcess(p.Id)
+                            .Select(w => new { w.hWnd, boundsOk = ShellHelpers.TryGetWindowBoundsManaged(w.hWnd, out var b) ? b : System.Windows.Rect.Empty })
+                            .Where(x => x.boundsOk != System.Windows.Rect.Empty)
+                            .Select(x => new { x.hWnd, rect = x.boundsOk, score = BoundsDiff(slot, x.boundsOk) })
+                            .OrderBy(x => x.score)
+                            .FirstOrDefault();
+                        if (candidates != null) targetHwnd = candidates.hWnd;
+                    }
                     if (targetHwnd != IntPtr.Zero && ShellHelpers.BringToFrontWindowHandle(targetHwnd)) return;
-                    if (p.MainWindowHandle != IntPtr.Zero && ShellHelpers.BringToFrontWindowHandle(p.MainWindowHandle)) return;
+                    if (p != null && p.MainWindowHandle != IntPtr.Zero && ShellHelpers.BringToFrontWindowHandle(p.MainWindowHandle)) return;
                 }
             }
             catch { }
@@ -391,6 +424,92 @@ public partial class MainWindow : Window
             await Task.Delay(1000);
             ShellHelpers.BringToFront(proc);
         }
+    }
+
+    private static double BoundsDiff(AppSlotConfig slot, System.Windows.Rect rect)
+    {
+        double l = slot.BoundsLeft ?? 0, t = slot.BoundsTop ?? 0, w = slot.BoundsWidth ?? 0, h = slot.BoundsHeight ?? 0;
+        return Math.Abs(rect.Left - l) + Math.Abs(rect.Top - t) + Math.Abs(rect.Width - w) + Math.Abs(rect.Height - h);
+    }
+
+    private async void Slot_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        var idx = SlotIndexFromSender(sender);
+        if (idx < 0) return;
+        var slot = _config.Slots[idx];
+        var hWnd = ResolveWindowHandleForSlot(slot);
+        if (hWnd == IntPtr.Zero) return;
+        var bmp = ShellHelpers.CaptureWindowToBitmapSource(hWnd);
+        if (bmp != null)
+        {
+            try
+            {
+                var data = new System.Windows.DataObject();
+                data.SetImage(bmp);
+                System.Windows.Clipboard.SetDataObject(data, true);
+                FlashSlotVisual(idx);
+            }
+            catch { }
+        }
+    }
+
+    private IntPtr ResolveWindowHandleForSlot(AppSlotConfig slot)
+    {
+        try
+        {
+            if (slot == null) return IntPtr.Zero;
+            if (slot.Hwnd.HasValue)
+            {
+                var h = new IntPtr(slot.Hwnd.Value);
+                if (ShellHelpers.IsWindowValid(h)) return h;
+            }
+            Process? p = null;
+            if (slot.ProcessId is int pid)
+            {
+                try { p = Process.GetProcessById(pid); } catch { }
+            }
+            if (p == null && slot.Hwnd.HasValue)
+            {
+                var pidFromHwnd = ShellHelpers.GetProcessIdForWindow(new IntPtr(slot.Hwnd.Value));
+                if (pidFromHwnd is int pid2) { try { p = Process.GetProcessById(pid2); } catch { } }
+            }
+            if (p != null)
+            {
+                var byTitle = ShellHelpers.FindWindowForProcessByTitle(p.Id, slot.WindowTitle);
+                if (byTitle != IntPtr.Zero) return byTitle;
+                if (slot.BoundsWidth.HasValue)
+                {
+                    var candidate = ShellHelpers.EnumerateTopLevelWindowsForProcess(p.Id)
+                        .Select(w => new { w.hWnd, ok = ShellHelpers.TryGetWindowBoundsManaged(w.hWnd, out var b) ? b : System.Windows.Rect.Empty })
+                        .Where(x => x.ok != System.Windows.Rect.Empty)
+                        .Select(x => new { x.hWnd, rect = x.ok, score = BoundsDiff(slot, x.ok) })
+                        .OrderBy(x => x.score)
+                        .FirstOrDefault();
+                    if (candidate != null) return candidate.hWnd;
+                }
+                if (p.MainWindowHandle != IntPtr.Zero) return p.MainWindowHandle;
+            }
+            var across = ShellHelpers.FindWindowByTitleAcrossProcesses(slot.WindowTitle);
+            if (ShellHelpers.IsWindowValid(across)) return across;
+        }
+        catch { }
+        return IntPtr.Zero;
+    }
+
+    private void FlashSlotVisual(int idx)
+    {
+        if (idx < 0 || idx >= _dynamicSlots.Count) return;
+        var tuple = _dynamicSlots[idx];
+        var btn = tuple.btn;
+        var original = btn.Background;
+        btn.Background = new SolidColorBrush(Media.Color.FromArgb(200, 255, 255, 255));
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            btn.Background = original;
+        };
+        timer.Start();
     }
 
     // Always-on-top now controlled via menu
@@ -592,6 +711,14 @@ public partial class MainWindow : Window
 
     private async void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        try
+        {
+            _config.Left = Left;
+            _config.Top = Top;
+            _config.Width = Width;
+            _config.Height = Height;
+        }
+        catch { }
         await SaveAsync();
         TeardownHotkeys();
         try { _foregroundTimer?.Stop(); _foregroundTimer = null; } catch { }
@@ -680,8 +807,13 @@ public partial class MainWindow : Window
             slot.TargetPath = exe;
             slot.Arguments = null;
             slot.WorkingDirectory = Path.GetDirectoryName(exe);
-            slot.ProcessId = null;
+            slot.ProcessId = null; // prefer HWND + title for same-process instances
             slot.WindowTitle = ShellHelpers.GetWindowTitle(hWnd);
+            slot.Hwnd = hWnd.ToInt64();
+            if (ShellHelpers.TryGetWindowBoundsManaged(hWnd, out var b))
+            {
+                slot.BoundsLeft = (int)b.Left; slot.BoundsTop = (int)b.Top; slot.BoundsWidth = (int)b.Width; slot.BoundsHeight = (int)b.Height;
+            }
             await SaveAsync();
             return true;
         }
@@ -702,6 +834,11 @@ public partial class MainWindow : Window
             slot.WorkingDirectory = Path.GetDirectoryName(exe);
             slot.ProcessId = process.Id;
             slot.WindowTitle = ShellHelpers.GetWindowTitle(hWnd);
+            slot.Hwnd = hWnd.ToInt64();
+            if (ShellHelpers.TryGetWindowBoundsManaged(hWnd, out var bb))
+            {
+                slot.BoundsLeft = (int)bb.Left; slot.BoundsTop = (int)bb.Top; slot.BoundsWidth = (int)bb.Width; slot.BoundsHeight = (int)bb.Height;
+            }
             await SaveAsync();
             return true;
         }

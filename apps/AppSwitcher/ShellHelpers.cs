@@ -21,9 +21,15 @@ public static class ShellHelpers
     [DllImport("user32.dll")] private static extern bool AllowSetForegroundWindow(int dwProcessId);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr hWnd);
+    public static bool IsWindowValid(IntPtr hWnd) => hWnd != IntPtr.Zero && IsWindow(hWnd);
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+    [DllImport("user32.dll")] private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
+    [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
+    // duplicate declaration exists below with SetLastError; keep only one. Removing this earlier duplicate.
+    [DllImport("user32.dll")] private static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowTextLength(IntPtr hWnd);
@@ -91,6 +97,17 @@ public static class ShellHelpers
         catch { return (IntPtr.Zero, null, null); }
     }
 
+    public static int? GetProcessIdForWindow(IntPtr hWnd)
+    {
+        try
+        {
+            if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) return null;
+            GetWindowThreadProcessId(hWnd, out var pid);
+            return (int)pid;
+        }
+        catch { return null; }
+    }
+
     public static string GetWindowTitle(IntPtr hWnd)
     {
         if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) return string.Empty;
@@ -144,6 +161,21 @@ public static class ShellHelpers
         catch { return IntPtr.Zero; }
     }
 
+    public static IntPtr FindWindowByTitleAcrossProcesses(string? titleHint)
+    {
+        if (string.IsNullOrWhiteSpace(titleHint)) return IntPtr.Zero;
+        try
+        {
+            var handles = new List<(IntPtr hWnd, string title)>();
+            EnumWindows((h, l) => { var t = GetWindowTitle(h); if (!string.IsNullOrWhiteSpace(t)) handles.Add((h, t)); return true; }, IntPtr.Zero);
+            var exact = handles.FirstOrDefault(w => string.Equals(w.title, titleHint, StringComparison.OrdinalIgnoreCase));
+            if (exact.hWnd != IntPtr.Zero) return exact.hWnd;
+            var contains = handles.FirstOrDefault(w => w.title.IndexOf(titleHint, StringComparison.OrdinalIgnoreCase) >= 0);
+            return contains.hWnd;
+        }
+        catch { return IntPtr.Zero; }
+    }
+
     public static Process? FindRunningProcessForTarget(string targetPath)
     {
         try
@@ -185,6 +217,75 @@ public static class ShellHelpers
         }
         catch { }
         return null;
+    }
+
+    public static BitmapSource? CaptureWindowToBitmapSource(IntPtr hWnd)
+    {
+        try
+        {
+            if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) return null;
+            if (!TryGetWindowBounds(hWnd, out var rect)) return null;
+            int width = Math.Max(1, rect.Right - rect.Left);
+            int height = Math.Max(1, rect.Bottom - rect.Top);
+
+            using var bmp = new System.Drawing.Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (var g = System.Drawing.Graphics.FromImage(bmp))
+            {
+                IntPtr hdc = g.GetHdc();
+                bool printed = false;
+                try { printed = PrintWindow(hWnd, hdc, 2); } catch { printed = false; }
+                g.ReleaseHdc(hdc);
+                if (!printed)
+                {
+                    try { g.CopyFromScreen(rect.Left, rect.Top, 0, 0, new System.Drawing.Size(width, height)); } catch { }
+                }
+            }
+            var hBitmap = bmp.GetHbitmap();
+            try
+            {
+                var src = System.Windows.Interop.Imaging.CreateBitmapSourceFromHBitmap(hBitmap, IntPtr.Zero, System.Windows.Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+                src.Freeze();
+                return src;
+            }
+            finally
+            {
+                DeleteObject(hBitmap);
+            }
+        }
+        catch { return null; }
+    }
+
+    private static bool TryGetWindowBounds(IntPtr hWnd, out RECT rect)
+    {
+        try
+        {
+            const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+            if (DwmGetWindowAttribute(hWnd, DWMWA_EXTENDED_FRAME_BOUNDS, out rect, Marshal.SizeOf<RECT>()) == 0)
+            {
+                return true;
+            }
+        }
+        catch { }
+        return GetWindowRect(hWnd, out rect);
+    }
+
+    public static bool TryGetWindowBoundsManaged(IntPtr hWnd, out System.Windows.Rect bounds)
+    {
+        if (TryGetWindowBounds(hWnd, out var r))
+        {
+            bounds = new System.Windows.Rect(r.Left, r.Top, Math.Max(0, r.Right - r.Left), Math.Max(0, r.Bottom - r.Top));
+            return true;
+        }
+        bounds = System.Windows.Rect.Empty;
+        return false;
+    }
+
+    [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr hObject);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left; public int Top; public int Right; public int Bottom;
     }
 
     public static (string? target, string? args, string? workDir) ResolveShortcutIfNeeded(string inputPath)
