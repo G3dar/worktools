@@ -202,6 +202,7 @@ public partial class MainWindow : Window
             btn.DragOver += Slot_DragOver;
         btn.Click += Slot_Click;
         btn.MouseDoubleClick += Slot_DoubleClick;
+            btn.PreviewMouseDown += Slot_PreviewMouseDown;
             btn.ContextMenu = BuildSlotContextMenu(i);
             SlotsGrid.Children.Add(btn);
             _dynamicSlots.Add((img, title, btn));
@@ -244,7 +245,12 @@ public partial class MainWindow : Window
     private ContextMenu BuildSlotContextMenu(int slotIndex)
     {
         var ctx = new ContextMenu();
-        // Clear first
+        // Rename first
+        var rename = new MenuItem { Header = "Rename" };
+        rename.Click += async (_, _) => await RenameSlotAsync(slotIndex);
+        ctx.Items.Add(rename);
+
+        ctx.Items.Add(new Separator());
         var clear = new MenuItem { Header = "Clear slot" };
         clear.Click += async (_, _) =>
         {
@@ -263,11 +269,6 @@ public partial class MainWindow : Window
             await SaveAsync();
         };
         ctx.Items.Add(clear);
-
-        ctx.Items.Add(new Separator());
-        var rename = new MenuItem { Header = "Rename" };
-        rename.Click += async (_, _) => await RenameSlotAsync(slotIndex);
-        ctx.Items.Add(rename);
 
         var changeIcon = new MenuItem { Header = "Change icon..." };
         changeIcon.Click += (_, _) => ChangeSlotIcon(slotIndex);
@@ -295,6 +296,28 @@ public partial class MainWindow : Window
                 ApplyIcons();
                 _ = SaveAsync();
             }
+        }
+        catch { }
+    }
+
+    private async void ClearSlot(int slotIndex)
+    {
+        try
+        {
+            if (slotIndex < 0 || slotIndex >= _config.Slots.Count) return;
+            var s = _config.Slots[slotIndex];
+            s.TargetPath = null;
+            s.Arguments = null;
+            s.WorkingDirectory = null;
+            s.AppUserModelId = null;
+            s.ProcessId = null;
+            s.WindowTitle = null;
+            s.Hwnd = null; s.BoundsLeft = null; s.BoundsTop = null; s.BoundsWidth = null; s.BoundsHeight = null;
+            s.CustomLabel = null;
+            s.CustomIconPath = null;
+            s.BackgroundHex = null;
+            ApplyIcons();
+            await SaveAsync();
         }
         catch { }
     }
@@ -461,6 +484,20 @@ public partial class MainWindow : Window
         {
             await Task.Delay(1000);
             ShellHelpers.BringToFront(proc);
+        }
+    }
+
+    private void Slot_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        // Middle mouse button clears the slot immediately
+        if (e.ChangedButton == MouseButton.Middle && e.ButtonState == MouseButtonState.Pressed)
+        {
+            var idx = SlotIndexFromSender(sender);
+            if (idx >= 0)
+            {
+                ClearSlot(idx);
+                e.Handled = true;
+            }
         }
     }
 
