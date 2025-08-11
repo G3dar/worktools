@@ -116,16 +116,35 @@ public partial class MainWindow : Window
 
     private static string GetShortLabel(AppSlotConfig slot)
     {
-        // Prefer custom label; else first 10 chars of the window title.
+        // Prefer custom label; else use the full window title (wrapping/ellipsis handled by TextBlock settings)
         if (!string.IsNullOrWhiteSpace(slot.CustomLabel))
         {
-            var c = slot.CustomLabel!.Trim();
-            return c.Length <= 10 ? c : c.Substring(0, 10);
+            return slot.CustomLabel.Trim();
         }
         var t = slot.WindowTitle;
         if (string.IsNullOrWhiteSpace(t)) return string.Empty;
-        t = t.Trim();
-        return t.Length <= 10 ? t : t.Substring(0, 10);
+        return StripAfterLastDashLikeSeparator(t.Trim());
+    }
+
+    private static string StripAfterLastDashLikeSeparator(string input)
+    {
+        try
+        {
+            // Consider common separators used by apps: hyphen, en dash, em dash surrounded by spaces
+            var separators = new[] { " - ", " – ", " — " };
+            int cut = -1;
+            foreach (var sep in separators)
+            {
+                int idx = input.LastIndexOf(sep, StringComparison.Ordinal);
+                if (idx > cut) cut = idx;
+            }
+            if (cut >= 0)
+            {
+                return input.Substring(0, cut).TrimEnd();
+            }
+        }
+        catch { }
+        return input;
     }
 
     private static ImageSource CreatePlaceholderIcon()
@@ -158,11 +177,27 @@ public partial class MainWindow : Window
         for (int i = 0; i < desiredVisible; i++)
         {
             var img = new System.Windows.Controls.Image { Width = _config.IconSize, Height = _config.IconSize };
-            var title = new TextBlock { Text = GetShortLabel(_config.Slots[i]), Foreground = Media.Brushes.Gainsboro, HorizontalAlignment = System.Windows.HorizontalAlignment.Center, FontSize = 11, Margin = new Thickness(0, 0, 0, 4) };
+            var title = new TextBlock
+            {
+                Text = GetShortLabel(_config.Slots[i]),
+                Foreground = Media.Brushes.Gainsboro,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                TextAlignment = TextAlignment.Center,
+                FontSize = 15,
+                FontWeight = FontWeights.Bold,
+                TextWrapping = TextWrapping.Wrap,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            // Cap to two lines by controlling line height and max height
+            title.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
+            var computedLineHeight = Math.Ceiling(title.FontSize * 1.25);
+            title.LineHeight = computedLineHeight;
+            title.MaxHeight = computedLineHeight * 2;
             var stack = new StackPanel();
             stack.Children.Add(title);
             stack.Children.Add(img);
-            var btn = new System.Windows.Controls.Button { Style = (Style)FindResource("IconButtonStyle"), AllowDrop = true, Height = _config.IconSize + 22, Content = stack, Margin = new Thickness(4) };
+            var btn = new System.Windows.Controls.Button { Style = (Style)FindResource("IconButtonStyle"), AllowDrop = true, Height = _config.IconSize + 48, Content = stack, Margin = new Thickness(4) };
             btn.Drop += Slot_Drop;
             btn.DragOver += Slot_DragOver;
         btn.Click += Slot_Click;
@@ -192,8 +227,9 @@ public partial class MainWindow : Window
         var cols = Math.Max(1, _config.Columns);
         double cellWidth = Math.Max(36, (SlotsGrid.ActualWidth / cols) - 8);
         double cellHeight = Math.Max(36, (SlotsGrid.ActualHeight / rows) - 8);
-        double titleReserve = 22;
-        double newSize = Math.Max(32, Math.Min(cellWidth, cellHeight - titleReserve));
+        // Reserve more vertical space for a two-line, larger title and reduce icon size accordingly
+        double titleReserve = 48;
+        double newSize = Math.Max(24, Math.Min(cellWidth, cellHeight - titleReserve));
         _config.IconSize = newSize;
         foreach (var s in _dynamicSlots)
         {
