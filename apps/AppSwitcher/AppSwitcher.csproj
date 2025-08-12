@@ -8,7 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>AppSwitcher</AssemblyName>
     <RootNamespace>AppSwitcher</RootNamespace>
-    <ApplicationIcon></ApplicationIcon>
+    <ApplicationIcon>AppSwitcher.ico</ApplicationIcon>
     <Platforms>x64</Platforms>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>

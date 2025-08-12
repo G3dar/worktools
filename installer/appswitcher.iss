@@ -2,7 +2,9 @@
 ; Requires: Inno Setup 6 (ISCC.exe)
 
 #define MyAppName "AppSwitcher"
-#define MyAppVersion "0.1.0"
+#ifndef MyAppVersion
+#define MyAppVersion "0.1.1"
+#endif
 #define MyAppPublisher "G3dar"
 #define MyAppURL "https://github.com/G3dar/worktools"
 #define MyAppExeName "AppSwitcher.exe"
@@ -24,6 +26,7 @@ Compression=lzma2
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64
 WizardStyle=modern
+SetupIconFile="appsetup.ico"
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

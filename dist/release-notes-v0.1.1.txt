@@ -1,0 +1,8 @@
+﻿- See release notes: https://lazy.toys/docs/appswitcher/releases/0.1.0/
+- Chocolatey: appswitcher 0.1.1 (pending moderation)
+
+Includes:
+- PNG-based runtime icon (window + tray)
+- MANUAL.md
+- Chocolatey packaging metadata + VERIFICATION
+- Minor UI polish and layout preset shortcuts
