@@ -9,6 +9,9 @@ using System.Windows.Interop;
 using System.Windows.Media.Imaging;
 using System.Text;
 using System.Runtime.InteropServices.ComTypes;
+using System.Windows.Automation;
+using System.Net.Http;
+using System.Text.Json;
 
 namespace AppSwitcher;
 
@@ -216,6 +219,152 @@ public static class ShellHelpers
                 var src = Imaging.CreateBitmapSourceFromHIcon(icon.Handle, Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(size, size));
                 src.Freeze();
                 return src;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    public static BitmapSource? TryGetFaviconFromChromeWindow(IntPtr hWnd, int size, out string? url)
+    {
+        url = null;
+        try
+        {
+            if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) return null;
+            // Chrome embeds page title and sometimes URL in window text; best-effort parse http(s) patterns in title
+            // Prefer reading URL via UI Automation from the address bar
+            url = TryGetBrowserUrlViaUIA(hWnd);
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                var title = GetWindowTitle(hWnd);
+                if (!string.IsNullOrWhiteSpace(title))
+                {
+                    var m = System.Text.RegularExpressions.Regex.Match(title, @"https?://[^\s]+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (m.Success) url = m.Value;
+                }
+            }
+            // If URL not found, try DevTools (requires Chrome started with --remote-debugging-port=9222)
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                url = TryGetChromeUrlViaDevTools();
+            }
+            // If URL still not found, still try to read favicon from current process cache via shell (best-effort):
+            if (url == null) return null;
+            return TryDownloadFaviconForUrl(url, size);
+        }
+        catch { return null; }
+    }
+
+    private static string? TryGetBrowserUrlViaUIA(IntPtr hWnd)
+    {
+        try
+        {
+            var root = AutomationElement.FromHandle(hWnd);
+            if (root == null) return null;
+            // Prefer specific known address bar identifiers
+            var candidates = new List<System.Windows.Automation.Condition>
+            {
+                new System.Windows.Automation.PropertyCondition(AutomationElement.AutomationIdProperty, "address and search bar"), // Chrome (en-US)
+                new System.Windows.Automation.PropertyCondition(AutomationElement.NameProperty, "Address and search bar"),
+                new System.Windows.Automation.PropertyCondition(AutomationElement.AutomationIdProperty, "url bar"), // Edge
+                new System.Windows.Automation.PropertyCondition(AutomationElement.NameProperty, "Search or enter web address"),
+                new System.Windows.Automation.PropertyCondition(AutomationElement.AutomationIdProperty, "Omnibox"),
+            };
+            foreach (var cond in candidates)
+            {
+                var el = root.FindFirst(TreeScope.Subtree, new System.Windows.Automation.AndCondition(
+                    new System.Windows.Automation.PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit),
+                    cond));
+                if (el != null && el.TryGetCurrentPattern(ValuePattern.Pattern, out var p1))
+                {
+                    var val = ((ValuePattern)p1).Current.Value;
+                    if (!string.IsNullOrWhiteSpace(val) && (val.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || val.StartsWith("https://", StringComparison.OrdinalIgnoreCase)))
+                        return val;
+                }
+            }
+            // Fallback: any edit containing a URL-looking value
+            var edits = root.FindAll(TreeScope.Subtree, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
+            foreach (AutomationElement e in edits)
+            {
+                try
+                {
+                    if (!e.TryGetCurrentPattern(ValuePattern.Pattern, out var p)) continue;
+                    var val = ((ValuePattern)p).Current.Value;
+                    if (string.IsNullOrWhiteSpace(val)) continue;
+                    if (val.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || val.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return val;
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    public static BitmapSource? TryDownloadFaviconForUrl(string url, int size)
+    {
+        try
+        {
+            var host = new Uri(url).Host;
+            // Try Google service first, then direct /favicon.ico
+            var faviconApi = $"https://www.google.com/s2/favicons?domain={host}&sz={size}";
+            using var wc = new System.Net.WebClient();
+            var bytes = wc.DownloadData(faviconApi);
+            using var ms = new System.IO.MemoryStream(bytes);
+            var bmp = new BitmapImage();
+            bmp.BeginInit();
+            bmp.StreamSource = ms;
+            bmp.DecodePixelWidth = size;
+            bmp.DecodePixelHeight = size;
+            bmp.CacheOption = BitmapCacheOption.OnLoad;
+            bmp.EndInit();
+            bmp.Freeze();
+            return bmp;
+        }
+        catch
+        {
+            try
+            {
+                var uri = new Uri(url);
+                var ico = new Uri(uri.GetLeftPart(UriPartial.Authority) + "/favicon.ico");
+                using var wc = new System.Net.WebClient();
+                var bytes = wc.DownloadData(ico);
+                using var ms = new System.IO.MemoryStream(bytes);
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.StreamSource = ms;
+                bmp.DecodePixelWidth = size;
+                bmp.DecodePixelHeight = size;
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+                return bmp;
+            }
+            catch { return null; }
+        }
+    }
+
+    private static string? TryGetChromeUrlViaDevTools()
+    {
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromMilliseconds(500) };
+            var resp = http.GetAsync("http://127.0.0.1:9222/json").Result;
+            if (!resp.IsSuccessStatusCode) return null;
+            var json = resp.Content.ReadAsStringAsync().Result;
+            using var doc = JsonDocument.Parse(json);
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                if (el.TryGetProperty("type", out var t) && t.GetString() == "page")
+                {
+                    if (el.TryGetProperty("url", out var u))
+                    {
+                        var s = u.GetString();
+                        if (!string.IsNullOrWhiteSpace(s)) return s;
+                    }
+                }
             }
         }
         catch { }

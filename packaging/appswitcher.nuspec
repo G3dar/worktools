@@ -2,11 +2,11 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
   <metadata>
     <id>appswitcher</id>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
     <title>AppSwitcher</title>
     <authors>G3dar</authors>
     <owners>G3dar</owners>
-    <projectUrl>https://github.com/G3dar/worktools</projectUrl>
+    <projectUrl>https://lazy.toys/</projectUrl>
     <licenseUrl>https://raw.githubusercontent.com/G3dar/worktools/main/packaging/LICENSE.txt</licenseUrl>
     <projectSourceUrl>https://github.com/G3dar/worktools</projectSourceUrl>
     <bugTrackerUrl>https://github.com/G3dar/worktools/issues</bugTrackerUrl>
@@ -15,11 +15,15 @@
     <summary>Portable EXE; Chocolatey will shim AppSwitcher.exe to PATH.</summary>
     <tags>switcher toolbar productivity wpf</tags>
     <packageSourceUrl>https://github.com/G3dar/worktools</packageSourceUrl>
-    <releaseNotes>https://github.com/G3dar/worktools/releases/tag/v0.1.0</releaseNotes>
-    <iconUrl>https://raw.githubusercontent.com/G3dar/worktools/main/apps/AppSwitcher/AppSwitcher.png</iconUrl>
+    <releaseNotes>https://lazy.toys/docs/appswitcher/releases/0.1.0/</releaseNotes>
+    <iconUrl>https://lazy.toys/assets/appswitcher/appswitcher-icon.png</iconUrl>
   </metadata>
   <files>
     <file src="..\apps\AppSwitcher\bin\Release\net8.0-windows\win-x64\publish\AppSwitcher.exe" target="tools\AppSwitcher.exe" />
+    <file src="tools\chocolateyinstall.ps1" target="tools\chocolateyinstall.ps1" />
+    <file src="tools\chocolateyuninstall.ps1" target="tools\chocolateyuninstall.ps1" />
+    <file src="VERIFICATION.txt" target="tools\VERIFICATION.txt" />
+    <file src="LICENSE.txt" target="tools\LICENSE.txt" />
   </files>
 </package>
 

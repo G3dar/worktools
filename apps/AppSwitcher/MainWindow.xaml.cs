@@ -32,6 +32,7 @@ public partial class MainWindow : Window
         this.AllowsTransparency = true;
         this.Topmost = true;
         this.PreviewMouseDown += OnPreviewMouseDownCapture;
+        TryApplyWindowIcon();
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -51,6 +52,23 @@ public partial class MainWindow : Window
         InitTrayIcon();
         InitHotkeys();
         StartForegroundWatcher();
+    }
+
+    private void TryApplyWindowIcon()
+    {
+        try
+        {
+            var uri = new Uri("pack://application:,,,/AppSwitcher.png", UriKind.Absolute);
+            var res = System.Windows.Application.GetResourceStream(uri);
+            if (res != null)
+            {
+                using var s = res.Stream;
+                var frame = BitmapFrame.Create(s, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+                frame.Freeze();
+                this.Icon = frame;
+            }
+        }
+        catch { }
     }
 
     private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -82,13 +100,51 @@ public partial class MainWindow : Window
             var slot = _config.Slots[i];
             img.Width = img.Height = _config.IconSize;
             title.Text = GetShortLabel(slot);
-            if (!string.IsNullOrEmpty(slot.TargetPath))
+        if (!string.IsNullOrEmpty(slot.TargetPath))
             {
                 BitmapSource? icon = null;
                 if (!string.IsNullOrWhiteSpace(slot.CustomIconPath) && File.Exists(slot.CustomIconPath))
                 {
                     try { icon = new BitmapImage(new Uri(slot.CustomIconPath)); } catch { }
                 }
+            // If this slot points to Chrome and has a saved hwnd, try favicon (non-blocking; fallback to app icon)
+            if (slot.TargetPath.EndsWith("chrome.exe", StringComparison.OrdinalIgnoreCase))
+            {
+                if (icon == null && !string.IsNullOrWhiteSpace(slot.CustomIconPath) && File.Exists(slot.CustomIconPath))
+                {
+                    try { icon = new BitmapImage(new Uri(slot.CustomIconPath)); } catch { }
+                }
+                if (icon == null && !string.IsNullOrWhiteSpace(slot.WebsiteUrl))
+                {
+                    var viaUrl = ShellHelpers.TryDownloadFaviconForUrl(slot.WebsiteUrl, (int)_config.IconSize);
+                    if (viaUrl != null) icon = viaUrl;
+                }
+                if (icon == null && slot.Hwnd.HasValue)
+                {
+                    // Fire and forget; after download, we save and re-apply icons
+                    var hwnd = new IntPtr(slot.Hwnd.Value);
+                    var idxLocal = i;
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var fav = ShellHelpers.TryGetFaviconFromChromeWindow(hwnd, (int)_config.IconSize, out var url);
+                            if (fav != null)
+                            {
+                                var dir = ConfigService.GetConfigDirectory();
+                                var name = $"favicon_{idxLocal}_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}.png";
+                                var path = System.IO.Path.Combine(dir, name);
+                                SaveBitmapSourceAsPng(fav, path);
+                                _config.Slots[idxLocal].CustomIconPath = path;
+                                if (!string.IsNullOrWhiteSpace(url)) _config.Slots[idxLocal].WebsiteUrl = url;
+                                await SaveAsync();
+                                Dispatcher.Invoke(ApplyIcons);
+                            }
+                        }
+                        catch { }
+                    });
+                }
+            }
                 icon ??= ShellHelpers.ExtractIconImageSource(slot.TargetPath, (int)_config.IconSize);
                 img.Source = icon ?? CreatePlaceholderIcon();
             }
@@ -145,6 +201,27 @@ public partial class MainWindow : Window
         }
         catch { }
         return input;
+    }
+
+    private static string DeriveLabelFromTitle(string exePath, string? windowTitle)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(windowTitle)) return string.Empty;
+            var appName = System.IO.Path.GetFileNameWithoutExtension(exePath) ?? string.Empty;
+            var title = windowTitle.Trim();
+            // Remove trailing app name patterns like " - Chrome" or " - Notepad"
+            var dashIdx = title.IndexOf(" - ", StringComparison.Ordinal);
+            if (dashIdx > 0) title = title.Substring(0, dashIdx).Trim();
+            // If it still ends with the app name, strip it
+            if (title.EndsWith(appName, StringComparison.OrdinalIgnoreCase))
+            {
+                title = title.Substring(0, Math.Max(0, title.Length - appName.Length)).TrimEnd();
+                if (title.EndsWith("-")) title = title.Substring(0, title.Length - 1).TrimEnd();
+            }
+            return title;
+        }
+        catch { return windowTitle ?? string.Empty; }
     }
 
     private static ImageSource CreatePlaceholderIcon()
@@ -279,6 +356,39 @@ public partial class MainWindow : Window
         ctx.Items.Add(changeBg);
 
         return ctx;
+    }
+
+    private static void SaveBitmapSourceAsPng(BitmapSource source, string path)
+    {
+        try
+        {
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(source));
+            using var fs = File.Create(path);
+            encoder.Save(fs);
+        }
+        catch { }
+    }
+
+    private void TrySetCustomIconFromClipboard(int slotIndex)
+    {
+        try
+        {
+            if (slotIndex < 0 || slotIndex >= _config.Slots.Count) return;
+            if (System.Windows.Clipboard.ContainsImage())
+            {
+                var img = System.Windows.Clipboard.GetImage();
+                if (img != null)
+                {
+                    var dir = ConfigService.GetConfigDirectory();
+                    var name = $"clipicon_{slotIndex}_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}.png";
+                    var path = System.IO.Path.Combine(dir, name);
+                    SaveBitmapSourceAsPng(img, path);
+                    _config.Slots[slotIndex].CustomIconPath = path;
+                }
+            }
+        }
+        catch { }
     }
 
     private void ChangeSlotIcon(int slotIndex)
@@ -845,7 +955,7 @@ public partial class MainWindow : Window
             {
                 Visible = true,
                 Text = "AppSwitcher",
-                Icon = System.Drawing.SystemIcons.Application
+                Icon = LoadTrayIcon() ?? System.Drawing.SystemIcons.Application
             };
             var ctx = new WinForms.ContextMenuStrip();
             for (int i = 0; i < Math.Min(_config.Rows * _config.Columns, 8); i++)
@@ -865,6 +975,24 @@ public partial class MainWindow : Window
         catch { }
     }
 
+    private static System.Drawing.Icon? LoadTrayIcon()
+    {
+        try
+        {
+            var uri = new Uri("pack://application:,,,/AppSwitcher.png", UriKind.Absolute);
+            var res = System.Windows.Application.GetResourceStream(uri);
+            if (res != null)
+            {
+                using var s = res.Stream;
+                using var bmp = System.Drawing.Bitmap.FromStream(s) as System.Drawing.Bitmap;
+                if (bmp == null) return null;
+                return System.Drawing.Icon.FromHandle(bmp.GetHicon());
+            }
+        }
+        catch { }
+        return null;
+    }
+
     private async Task AssignActiveWindowToSlot(int slotIndex)
     {
         var (hWnd, process, exe) = ShellHelpers.GetActiveWindowProcess();
@@ -876,6 +1004,27 @@ public partial class MainWindow : Window
         var activeTitle = ShellHelpers.GetWindowTitle(hWnd);
         slot.ProcessId = process.Id;
         slot.WindowTitle = string.IsNullOrWhiteSpace(activeTitle) ? process.MainWindowTitle : activeTitle;
+        // Auto-derive a friendly label from the window title (before first dash, excluding app name)
+        slot.CustomLabel = DeriveLabelFromTitle(exe, slot.WindowTitle);
+        TrySetCustomIconFromClipboard(slotIndex);
+        // If Chrome tab, try to fetch favicon and URL now
+        if (exe.EndsWith("chrome.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            var fav = ShellHelpers.TryGetFaviconFromChromeWindow(hWnd, (int)_config.IconSize, out var url);
+            if (fav != null)
+            {
+                try
+                {
+                    var dir = ConfigService.GetConfigDirectory();
+                    var name = $"favicon_{slotIndex}_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}.png";
+                    var path = System.IO.Path.Combine(dir, name);
+                    SaveBitmapSourceAsPng(fav, path);
+                    slot.CustomIconPath = path;
+                }
+                catch { }
+            }
+            if (!string.IsNullOrWhiteSpace(url)) slot.WebsiteUrl = url;
+        }
         ApplyIcons();
         await SaveAsync();
     }
@@ -894,6 +1043,8 @@ public partial class MainWindow : Window
             slot.ProcessId = null; // prefer HWND + title for same-process instances
             slot.WindowTitle = ShellHelpers.GetWindowTitle(hWnd);
             slot.Hwnd = hWnd.ToInt64();
+            slot.CustomLabel = DeriveLabelFromTitle(exe, slot.WindowTitle);
+            TrySetCustomIconFromClipboard(slotIndex);
             if (ShellHelpers.TryGetWindowBoundsManaged(hWnd, out var b))
             {
                 slot.BoundsLeft = (int)b.Left; slot.BoundsTop = (int)b.Top; slot.BoundsWidth = (int)b.Width; slot.BoundsHeight = (int)b.Height;
@@ -919,6 +1070,8 @@ public partial class MainWindow : Window
             slot.ProcessId = process.Id;
             slot.WindowTitle = ShellHelpers.GetWindowTitle(hWnd);
             slot.Hwnd = hWnd.ToInt64();
+            slot.CustomLabel = DeriveLabelFromTitle(exe, slot.WindowTitle);
+            TrySetCustomIconFromClipboard(slotIndex);
             if (ShellHelpers.TryGetWindowBoundsManaged(hWnd, out var bb))
             {
                 slot.BoundsLeft = (int)bb.Left; slot.BoundsTop = (int)bb.Top; slot.BoundsWidth = (int)bb.Width; slot.BoundsHeight = (int)bb.Height;

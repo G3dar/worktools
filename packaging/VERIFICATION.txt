@@ -3,11 +3,11 @@ VERIFICATION
 This package includes the portable executable AppSwitcher.exe.
 
 Source: Built from source at https://github.com/G3dar/worktools (app: AppSwitcher)
-Version: 0.1.0
+Version: 0.1.1
 
 Checksum (SHA256) of the embedded binary:
 
-  bc2cd3285174de616cf081da7fb693113ca82e257f14821354f9111481829800
+  0c87defd325ec7c266e32e4a57db7c0c64343f5fc03a908070dd3218b467165b
 
 Verification steps for reviewers/users:
 1. Extract the .nupkg (it's a zip) and locate tools\AppSwitcher.exe

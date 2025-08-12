@@ -19,6 +19,7 @@ public class AppSlotConfig
     public string? CustomLabel { get; set; }
     public string? CustomIconPath { get; set; }
     public string? BackgroundHex { get; set; }
+    public string? WebsiteUrl { get; set; }
 }
 
 public class ToolbarConfig
